@@ -3,45 +3,135 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from audio.tts_service import get_audio
 from training.plans.timed_fartlek_plan import TimedFartlekPlan
-import asyncio
+from web.server import WebServer
 import os
+import shutil
+import json
+
+# Глобальный веб-сервер
+web_server = None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! Я твой беговой коуч. Жми /fartlek")
 
 async def fartlek(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global web_server
+    
     chat_id = update.effective_chat.id
+    await update.message.reply_text("🔥 Создаю аудиогид для тренировки...")
     
-    # Отправляем вступление сразу
-    intro_text = "🔥 Начинаем фортлек! 5 минут разминки. Приготовься!"
-    audio_path = get_audio(intro_text)
-    
-    if os.path.exists(audio_path):
-        with open(audio_path, "rb") as audio:
-            await update.message.reply_audio(
-                audio=audio,
-                title="Начало тренировки",
-                caption="🎧 Слушай и следуй указаниям!"
-            )
-    
-    # Запланируем остальные сообщения
-    context.application.create_task(send_training_messages(context, chat_id))
+    try:
+        # Создаём плейлист для веб-плеера
+        create_web_player_playlist()
+        
+        # Запускаем веб-сервер
+        if web_server is None:
+            web_server = WebServer(port=8000)
+        
+        if not web_server.is_running():
+            web_server.start()
+        
+        # Отправляем ссылку
+        await update.message.reply_text(
+            "🎧 Аудиогид готов!\n"
+            "Откройте в браузере: http://localhost:8000\n"
+            "💡 Используйте наушники во время пробежки!"
+        )
+        
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-async def send_training_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    """Отправка сообщений по таймеру на основе TimedFartlekPlan"""
+def create_silence_file(duration_seconds, directory, filename):
+    """Создаёт MP3 файл с точной длительностью тишины (без pydub)"""
+    
+    silence_path = os.path.join(directory, filename)
+    
+    # Используем готовый тишинный шаблон
+    silent_template = os.path.join("audio_cache", "silence_template.mp3")
+    
+    # Если шаблона нет - создаём
+    if not os.path.exists(silent_template):
+        create_silence_template(silent_template)
+    
+    # Создаём файл нужной длительности
+    # MP3: ~40KB в секунду для нормального качества
+    target_bytes = duration_seconds * 40 * 1024  # 40KB/сек
+    
+    with open(silence_path, "wb") as outfile:
+        bytes_written = 0
+        
+        with open(silent_template, "rb") as template:
+            template_data = template.read()
+            
+            while bytes_written < target_bytes:
+                remaining_bytes = target_bytes - bytes_written
+                write_size = min(len(template_data), remaining_bytes)
+                outfile.write(template_data[:write_size])
+                bytes_written += write_size
+    
+    print(f"Создана тишина {duration_seconds} секунд: {silence_path}")
+    return silence_path
+
+def create_silence_template(template_path):
+    """Создаёт шаблон тишины"""
+    from gtts import gTTS
+    
+    # Создаём очень короткий и тихий звук
+    tts = gTTS(text=".", lang='ru', slow=True, tld='ru')
+    tts.save(template_path)
+    
+    # Увеличиваем размер файла для лучшего качества
+    # Повторяем содержимое 10 раз
+    with open(template_path, "rb") as infile:
+        data = infile.read()
+    
+    with open(template_path, "wb") as outfile:
+        for _ in range(10):
+            outfile.write(data)
+
+def create_web_player_playlist():
+    """Создаёт плейлист для веб-плеера"""
+    
+    # Создаём папку для аудио
+    web_audio_dir = os.path.join("web", "audio")
+    os.makedirs(web_audio_dir, exist_ok=True)
     
     # Получаем план тренировки
     plan = TimedFartlekPlan()
-    phases = plan.phases
     
-    # Создаём список сообщений с таймингами
-    messages = []
-    cumulative_time = 300  # 5 минут разминки уже прошли
+    # Создаём список треков
+    playlist = []
     
-    # Обрабатываем фазы из плана
-    for phase in phases:
+    # 1. Вступление
+    intro_msg = "🔥 Начинаем фортлек! 5 минут разминки. Лёгкий бег или ходьба."
+    intro_path = get_audio(intro_msg)
+    intro_dest = os.path.join(web_audio_dir, "01_intro.mp3")
+    shutil.copy2(intro_path, intro_dest)
+    playlist.append({
+        "file": "audio/01_intro.mp3",
+        "title": "Вступление",
+        "type": "speech",
+        "duration": 0
+    })
+    
+    print("Создаём разминку 5 минут...")
+    
+    # 2. Музыка разминки (5 минут = 300 секунд)
+    warmup_file = create_silence_file(300, web_audio_dir, "02_warmup.mp3")
+    playlist.append({
+        "file": "audio/02_warmup.mp3",
+        "title": "Разминка 5 минут",
+        "type": "music",
+        "duration": 300
+    })
+    
+    # 3. Основная тренировка
+    track_number = 3
+    
+    for phase in plan.phases:
         if phase.phase_type == "warmup":
-            continue  # Уже учли в вступлении
+            continue
             
         elif phase.phase_type == "run":
             minutes = phase.duration // 60
@@ -50,7 +140,7 @@ async def send_training_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                 text = f"🟡 Интервал: {minutes} минут в ускоренном темпе!"
             else:
                 text = f"🟡 Интервал: {minutes} минут {seconds} секунд в ускоренном темпе!"
-                
+            
         elif phase.phase_type == "rest":
             minutes = phase.duration // 60
             seconds = phase.duration % 60
@@ -58,52 +148,57 @@ async def send_training_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: in
                 text = f"🟢 Отдых: {minutes} минут. Восстановись."
             else:
                 text = f"🟢 Отдых: {minutes} минут {seconds} секунд. Восстановись."
-                
+            
         elif phase.phase_type == "cooldown":
             text = "🔵 Заминка: 3 минуты ходьбы. Отличная работа!"
         
-        else:
-            continue
-            
-        messages.append({
-            "delay": cumulative_time,
-            "text": text
+        # Добавляем сообщение тренера
+        print(f"Создаём сообщение: {text}")
+        msg_path = get_audio(text)
+        msg_filename = f"{track_number:02d}_message.mp3"
+        msg_dest = os.path.join(web_audio_dir, msg_filename)
+        shutil.copy2(msg_path, msg_dest)
+        playlist.append({
+            "file": f"audio/{msg_filename}",
+            "title": text,
+            "type": "speech",
+            "duration": 0
         })
+        track_number += 1
         
-        cumulative_time += phase.duration
+        # Добавляем музыку/паузу правильной длительности
+        music_duration = phase.duration
+        music_filename = f"{track_number:02d}_music.mp3"
+        
+        print(f"Создаём музыку {music_duration} секунд...")
+        # Создаём музыку правильной длительности
+        music_file = create_silence_file(music_duration, web_audio_dir, music_filename)
+        
+        playlist.append({
+            "file": f"audio/{music_filename}",
+            "title": f"Музыка {music_duration} сек",
+            "type": "music", 
+            "duration": music_duration
+        })
+        track_number += 1
     
-    # Добавляем финальное сообщение
-    messages.append({
-        "delay": cumulative_time,
-        "text": "🏆 Тренировка завершена! Ты молодец!"
+    # 4. Финал
+    final_msg = "🏆 Тренировка завершена! Ты молодец!"
+    final_path = get_audio(final_msg)
+    final_filename = f"{track_number:02d}_final.mp3"
+    final_dest = os.path.join(web_audio_dir, final_filename)
+    shutil.copy2(final_path, final_dest)
+    playlist.append({
+        "file": f"audio/{final_filename}",
+        "title": "Финал",
+        "type": "speech",
+        "duration": 0
     })
     
-    # Отправляем сообщения по таймеру
-    start_time = asyncio.get_event_loop().time()
+    # Сохраняем плейлист
+    playlist_path = os.path.join("web", "playlist.json")
+    with open(playlist_path, "w", encoding="utf-8") as f:
+        json.dump(playlist, f, ensure_ascii=False, indent=2)
     
-    for item in messages:
-        # Ждём нужное время
-        delay = item["delay"]
-        elapsed = asyncio.get_event_loop().time() - start_time
-        sleep_time = max(0, delay - elapsed)
-        
-        if sleep_time > 0:
-            await asyncio.sleep(sleep_time)
-        
-        # Отправляем как аудио (автопроигрывание)
-        text = item["text"]
-        try:
-            audio_path = get_audio(text)
-            if os.path.exists(audio_path):
-                with open(audio_path, "rb") as audio:
-                    await context.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=audio,
-                        title="Тренер",
-                        caption=text
-                    )
-            else:
-                await context.bot.send_message(chat_id=chat_id, text=text)
-        except Exception as e:
-            print(f"Ошибка отправки аудио: {e}")
-            await context.bot.send_message(chat_id=chat_id, text=text)
+    print(f"Плейлист создан: {len(playlist)} треков")
+    return playlist
