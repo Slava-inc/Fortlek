@@ -42,6 +42,7 @@ async def fartlek(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Ошибка: {e}")
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
+
 def create_silence_file(duration_seconds, directory, filename):
     """Создаёт MP3 файл с точной длительностью тишины (без pydub)"""
     
@@ -82,13 +83,31 @@ def create_silence_template(template_path):
     tts.save(template_path)
     
     # Увеличиваем размер файла для лучшего качества
-    # Повторяем содержимое 10 раз
     with open(template_path, "rb") as infile:
         data = infile.read()
     
     with open(template_path, "wb") as outfile:
         for _ in range(10):
             outfile.write(data)
+
+def create_music_file(duration_seconds, directory, filename):
+    """Создаёт музыкальный файл (использует готовые треки или создаёт тишину)"""
+    
+    music_path = os.path.join(directory, filename)
+    
+    # Ищем готовый музыкальный файл нужной длительности
+    source_file = f"background_{duration_seconds}sec.mp3"
+    source_path = os.path.join("web", "audio", source_file)
+    
+    if os.path.exists(source_path):
+        # Используем готовый файл
+        shutil.copy2(source_path, music_path)
+        print(f"Использован готовый файл: {source_file}")
+        return music_path
+    else:
+        # Если нет готового файла - создаём тишину
+        print(f"Файл {source_file} не найден, создаём тишину {duration_seconds} сек")
+        return create_silence_file(duration_seconds, directory, filename)
 
 def create_web_player_playlist():
     """Создаёт плейлист для веб-плеера"""
@@ -115,10 +134,10 @@ def create_web_player_playlist():
         "duration": 0
     })
     
-    print("Создаём разминку 5 минут...")
+    print("=== Создаём разминку 5 минут ===")
     
     # 2. Музыка разминки (5 минут = 300 секунд)
-    warmup_file = create_silence_file(300, web_audio_dir, "02_warmup.mp3")
+    warmup_file = create_music_file(300, web_audio_dir, "02_warmup.mp3")
     playlist.append({
         "file": "audio/02_warmup.mp3",
         "title": "Разминка 5 минут",
@@ -129,31 +148,23 @@ def create_web_player_playlist():
     # 3. Основная тренировка
     track_number = 3
     
-    for phase in plan.phases:
+    for i, phase in enumerate(plan.phases):
         if phase.phase_type == "warmup":
             continue
             
         elif phase.phase_type == "run":
             minutes = phase.duration // 60
-            seconds = phase.duration % 60
-            if seconds == 0:
-                text = f"🟡 Интервал: {minutes} минут в ускоренном темпе!"
-            else:
-                text = f"🟡 Интервал: {minutes} минут {seconds} секунд в ускоренном темпе!"
+            text = f"🟡 Интервал: {minutes} минут в ускоренном темпе!"
             
         elif phase.phase_type == "rest":
             minutes = phase.duration // 60
-            seconds = phase.duration % 60
-            if seconds == 0:
-                text = f"🟢 Отдых: {minutes} минут. Восстановись."
-            else:
-                text = f"🟢 Отдых: {minutes} минут {seconds} секунд. Восстановись."
+            text = f"🟢 Отдых: {minutes} минут. Восстановись."
             
         elif phase.phase_type == "cooldown":
             text = "🔵 Заминка: 3 минуты ходьбы. Отличная работа!"
         
         # Добавляем сообщение тренера
-        print(f"Создаём сообщение: {text}")
+        print(f"=== Создаём сообщение {track_number}: {text} ===")
         msg_path = get_audio(text)
         msg_filename = f"{track_number:02d}_message.mp3"
         msg_dest = os.path.join(web_audio_dir, msg_filename)
@@ -170,9 +181,9 @@ def create_web_player_playlist():
         music_duration = phase.duration
         music_filename = f"{track_number:02d}_music.mp3"
         
-        print(f"Создаём музыку {music_duration} секунд...")
+        print(f"=== Создаём музыку {track_number}: {music_duration} сек ===")
         # Создаём музыку правильной длительности
-        music_file = create_silence_file(music_duration, web_audio_dir, music_filename)
+        music_file = create_music_file(music_duration, web_audio_dir, music_filename)
         
         playlist.append({
             "file": f"audio/{music_filename}",
@@ -200,5 +211,16 @@ def create_web_player_playlist():
     with open(playlist_path, "w", encoding="utf-8") as f:
         json.dump(playlist, f, ensure_ascii=False, indent=2)
     
-    print(f"Плейлист создан: {len(playlist)} треков")
+    print(f"✅ Плейлист создан: {len(playlist)} треков")
+    
+    # Проверяем все созданные файлы
+    print("=== Проверка созданных файлов ===")
+    for file_info in playlist:
+        filepath = os.path.join("web", file_info["file"])
+        if os.path.exists(filepath):
+            size = os.path.getsize(filepath)
+            print(f"✅ {file_info['file']}: {size} байт")
+        else:
+            print(f"❌ {file_info['file']}: файл не найден")
+    
     return playlist

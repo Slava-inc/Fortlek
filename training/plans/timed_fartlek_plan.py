@@ -19,12 +19,12 @@ class TimedFartlekPlan:
     def __init__(self):
         self.phases = [
             Phase("warmup", 30, "Разминка", "low"),
-            Phase("run", 18, "Интервал 1", "medium"),
-            Phase("rest", 12, "Отдых", "low"),
-            Phase("run", 24, "Интервал 2", "medium"),
-            Phase("rest", 12, "Отдых", "low"),
-            Phase("run", 30, "Интервал 3", "high"),
-            Phase("rest", 12, "Отдых", "low"),
-            Phase("run", 18, "Финальный интервал", "high"),
-            Phase("cooldown", 18, "Заминка", "low")
+            Phase("run", 180, "Интервал 1", "medium"),
+            Phase("rest", 120, "Отдых", "low"),
+            Phase("run", 240, "Интервал 2", "medium"),
+            Phase("rest", 120, "Отдых", "low"),
+            Phase("run", 300, "Интервал 3", "high"),
+            Phase("rest", 120, "Отдых", "low"),
+            Phase("run", 180, "Финальный интервал", "high"),
+            Phase("cooldown", 180, "Заминка", "low")
         ]
